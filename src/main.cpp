@@ -19,8 +19,8 @@ static std::atomic<bool> sampleReady;
 static Threads::Mutex mutex;
 
 // Prototypes for thread body functions
-static void t1_thread_func(void* arg);
-static void t2_thread_func(void* arg);
+static void producer_thread_func(void* arg);
+static void consumer_thread_func(void* arg);
    
 // For reference, API for Mutex class
 /*
@@ -31,12 +31,12 @@ static void t2_thread_func(void* arg);
 */
 void setup()
 {
-    const int t1_id = threads.addThread(t1_thread_func, nullptr, DEFAULT_STACK_SIZE);
+    const int t1_id = threads.addThread(producer_thread_func, nullptr, DEFAULT_STACK_SIZE);
     if (t1_id == -1) {
         Serial.println("error creating thread t1");
     }
 
-    const int t2_id = threads.addThread(t2_thread_func, nullptr, DEFAULT_STACK_SIZE);
+    const int t2_id = threads.addThread(consumer_thread_func, nullptr, DEFAULT_STACK_SIZE);
     if (t2_id == -1) {
         Serial.println("error creating thread t2");
     }
@@ -48,27 +48,38 @@ void loop()
     yield();
 }
 
-static void t1_thread_func(void* arg) {
+static void producer_thread_func(void* arg) {
     static int c;
     while (true) {
+        // wait until the consumer has read the sample and
+        // unlocked the mutex
         while (mutex.try_lock() == 0) {
             threads.yield();
         }
-        sample.x = c;
-        sample.y = ++c / 2;
+
+        // Assign some dummy sample data
+        sample.x = c++;
+        sample.y = c / 2;
+
+        // We've finished updating the sample now, so can unlock
+        // the mutex.
         mutex.unlock();
+
+        // and indicate the sample is ready for reading.
         sampleReady = true; 
         threads.delay(500);
     }
 }
 
-static void t2_thread_func(void* arg) {
+static void consumer_thread_func(void* arg) {
     char buf[64];
     uint32_t x;
     uint32_t y;
 
     while (true) {
         Serial.println("Waiting for sample to be ready");
+
+        // Wait until the producer has indicated a new sample is ready.
         while (!sampleReady) {
             threads.yield();
         }
@@ -81,6 +92,9 @@ static void t2_thread_func(void* arg) {
         }
         x = sample.x;
         y = sample.y;
+
+        // finished getting data from the sample, so we can unlock
+        // the mutex now.
         mutex.unlock();
         snprintf(buf, sizeof buf, "Sample is ready, x = %ld, y = %ld", x, y);
         Serial.println(buf);
